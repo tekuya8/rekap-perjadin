@@ -1,0 +1,17 @@
+{
+  "name": "Rekap Perjadin — Surat Tugas & Bukti",
+  "short_name": "Rekap Perjadin",
+  "description": "Rekap surat tugas perjalanan dinas dan kelengkapan bukti, terhubung ke Google Sheets dan Drive.",
+  "lang": "id",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f6f7fb",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
