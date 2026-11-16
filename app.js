@@ -70,8 +70,8 @@ async function api(action, data = {}, cfg = S.cfg, timeoutMs = 45000) {
     if (!j.ok) throw new Error(j.error || 'Permintaan gagal');
     return j.data;
   } catch (e) {
-    if (e.name === 'AbortError') throw netErr('Koneksi terlalu lama');
-    if (e instanceof TypeError) throw netErr('Tidak ada koneksi internet');
+    if (e.name === 'AbortError') throw netErr('Server terlalu lama membalas');
+    if (e instanceof TypeError) throw netErr(navigator.onLine ? 'Kiriman terputus di tengah jalan' : 'Tidak ada koneksi internet');
     throw e;
   } finally { clearTimeout(timer); }
 }
@@ -274,6 +274,30 @@ async function kompresGambar(file, max = 2400, q = 0.85) {
   } finally { URL.revokeObjectURL(url); }
 }
 const keBase64 = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+// File besar dikirim per potongan (~570 KB) supaya tahan sinyal naik-turun.
+// Potongan yang gagal dicoba ulang otomatis sampai 3 kali.
+const POTONG = 786432; // panjang base64 per potongan (kelipatan 4)
+const tidur = ms => new Promise(r => setTimeout(r, ms));
+async function kirimIsi(b64, onProg) {
+  if (b64.length <= POTONG) { onProg && onProg(0); return { base64: b64 }; }
+  const uploadId = 'UP' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const total = Math.ceil(b64.length / POTONG);
+  for (let i = 0; i < total; i++) {
+    const data = b64.slice(i * POTONG, (i + 1) * POTONG);
+    for (let coba = 1; ; coba++) {
+      try { await api('unggahPotongan', { uploadId, index: i, total, data }, S.cfg, 90000); break; }
+      catch (e) {
+        if (!e.network || coba >= 3) throw e;
+        onProg && onProg(i / total, `sinyal tersendat, mencoba lagi (${coba}/2)…`);
+        await tidur(2000 * coba);
+      }
+    }
+    onProg && onProg((i + 1) / total);
+  }
+  return { uploadId, total };
+}
+const persen = x => Math.round(x * 100) + '%';
+
 async function siapkan(file, maxImg) {
   if (/^image\/(jpeg|png|webp)$/.test(file.type) && file.size > 400 * 1024) {
     try { return { nama: file.name.replace(/\.[^.]+$/, '') + '.jpg', tipe: 'image/jpeg', blob: await kompresGambar(file, maxImg) }; } catch (e) { /* kirim asli */ }
@@ -312,10 +336,11 @@ function openUploadST() {
         const p = await siapkan(file, 2400);
         if (p.blob.size > 18 * 1024 * 1024) throw new Error('File lebih dari 18 MB. Scan ulang dengan resolusi lebih kecil.');
         const b64 = await keBase64(p.blob);
-        langkah(1, Math.round(p.blob.size / 1024) + ' KB');
-        const t = setTimeout(() => langkah(2), 2500);
-        const r = await api('bacaST', { nama: p.nama, tipe: p.tipe, base64: b64 }, S.cfg, 240000);
-        clearTimeout(t);
+        const kb = Math.round(p.blob.size / 1024) + ' KB';
+        langkah(1, kb);
+        const isi = await kirimIsi(b64, (x, info) => langkah(1, `${kb} · ${persen(x)}${info ? ' · ' + info : ''}`));
+        langkah(2);
+        const r = await api('bacaST', { nama: p.nama, tipe: p.tipe, ...isi }, S.cfg, 240000);
         langkah(3);
         setTimeout(() => openForm(null, r), 350);
       } catch (err) {
@@ -533,11 +558,15 @@ async function unggahBukti(p, jenis, pelaku, files, box) {
   if (!navigator.onLine) return toast('Butuh internet untuk mengunggah', 'err');
   let ok = 0;
   for (let i = 0; i < files.length; i++) {
-    if (box) box.innerHTML = `<span class="fchip up"><span class="spinner" style="width:14px;height:14px;border:2px solid #bfdbfe;border-top-color:#2563eb;border-radius:50%;animation:spin .7s linear infinite"></span><span>Mengunggah ${i + 1}/${files.length}: ${esc(files[i].name)}</span></span>`;
+    const tampil = ket => { if (box) box.innerHTML = `<span class="fchip up"><span class="spinner" style="width:14px;height:14px;border:2px solid #bfdbfe;border-top-color:#2563eb;border-radius:50%;animation:spin .7s linear infinite"></span><span>${files.length > 1 ? `File ${i + 1}/${files.length} · ` : ''}${esc(ket)}</span></span>`; };
+    tampil('Menyiapkan ' + files[i].name);
     try {
       const s = await siapkan(files[i], 1920);
       const b64 = await keBase64(s.blob);
-      const r = await api('unggahBukti', { idPerjadin: p.id, jenis, pelaku, nama: s.nama, tipe: s.tipe, base64: b64 }, S.cfg, 180000);
+      const kb = Math.round(s.blob.size / 1024);
+      const isi = await kirimIsi(b64, (x, info) => tampil(`Mengunggah ${kb} KB · ${persen(x)}${info ? ' · ' + info : ''}`));
+      tampil('Menyimpan ke Drive…');
+      const r = await api('unggahBukti', { idPerjadin: p.id, jenis, pelaku, nama: s.nama, tipe: s.tipe, ...isi }, S.cfg, 180000);
       S.bukti.push(r.bukti); ok++;
     } catch (e) { toast('Gagal unggah: ' + e.message, 'err'); }
   }
